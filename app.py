@@ -22,29 +22,13 @@ def configure_gemini() -> None:
 configure_gemini()
 
 # -------------------------
-# CUSTOM CSS (Glassmorphic UI)
+# CUSTOM CSS
 # -------------------------
 st.markdown("""
     <style>
-    .stApp {
-        background: linear-gradient(135deg, rgba(34,193,195,0.6), rgba(253,187,45,0.6));
-        backdrop-filter: blur(15px);
-        color: white;
-    }
-    .glass-card {
-        padding: 25px;
-        border-radius: 20px;
-        background: rgba(255,255,255,0.1);
-        backdrop-filter: blur(20px);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        text-align: center;
-    }
-    .title {
-        font-size: 2rem;
-        font-weight: bold;
-        color: white;
-        text-shadow: 1px 1px 2px black;
-    }
+    .stApp {background: linear-gradient(135deg, rgba(34,193,195,0.6), rgba(253,187,45,0.6)); color:white;}
+    .glass-card {padding:20px; border-radius:20px; background:rgba(255,255,255,0.1); backdrop-filter:blur(20px);}
+    .title {font-size:2rem; font-weight:bold; text-shadow:1px 1px 2px black;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -54,49 +38,74 @@ st.markdown("""
 st.markdown("<div class='glass-card'><p class='title'>🧘 AsanaSense</p><p>AI-powered yoga feedback</p></div>", unsafe_allow_html=True)
 
 # -------------------------
-# LIVE CAMERA INPUT
+# JAVASCRIPT VOICE LISTENER
 # -------------------------
-img_file = st.camera_input("Capture your yoga pose 📸")
+st.markdown("""
+<script>
+let recognition;
+if (!window.recognitionStarted) {
+    window.recognitionStarted = true;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.start();
 
-analysis_text = ""
-if img_file and st.button("Analyze Pose"):
+    recognition.onresult = function(event) {
+        const transcript = event.results[event.results.length-1][0].transcript.trim().toLowerCase();
+        if (transcript.includes("click")) {
+            // Save trigger in localStorage
+            localStorage.setItem("voice_trigger", "click");
+            // Force streamlit reload
+            window.location.reload();
+        }
+    };
+}
+</script>
+""", unsafe_allow_html=True)
+
+# -------------------------
+# CHECK IF "CLICK" TRIGGERED
+# -------------------------
+voice_trigger = st.session_state.get("voice_trigger", False)
+if "voice_trigger" not in st.session_state:
+    st.session_state["voice_trigger"] = False
+
+# Hack: Read trigger from browser localStorage via Streamlit
+trigger = st.experimental_get_query_params().get("voice_trigger", None)
+
+# -------------------------
+# CAMERA CAPTURE & ANALYZE
+# -------------------------
+img_file = st.camera_input("Say 'click' to capture 📸")
+
+if img_file:
     img = Image.open(img_file)
+    st.image(img, caption="Your Pose", use_column_width=True)
 
-    # Convert image to base64
+    # Auto analyze immediately
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         img.save(tmp.name)
         image_path = tmp.name
+        img_bytes = open(image_path, "rb").read()
 
-    img_bytes = open(image_path, "rb").read()
-    img_b64 = base64.b64encode(img_bytes).decode()
-
-    st.image(img, caption="Your Pose", use_column_width=True)
-
-    # -------------------------
-    # GEMINI VISION API CALL
-    # -------------------------
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = "Analyze this yoga pose and provide corrective feedback in 3-4 concise sentences."
 
     try:
-        response = model.generate_content([
-            prompt,
-            {"mime_type": "image/png", "data": img_bytes}
-        ])
-        analysis_text = response.text
+        response = model.generate_content([prompt, {"mime_type": "image/png", "data": img_bytes}])
+        feedback = response.text
         st.success("✅ Analysis Complete")
-        st.markdown(f"**Feedback:** {analysis_text}")
-    except Exception as e:
-        st.error(f"❌ API Error: {str(e)}")
+        st.markdown(f"**Feedback:** {feedback}")
 
-# -------------------------
-# TEXT TO SPEECH
-# -------------------------
-if analysis_text:
-    if st.button("🔊 Listen to Feedback"):
-        tts = gTTS(analysis_text)
+        # Auto TTS playback
+        tts = gTTS(feedback)
         tts_path = "feedback.mp3"
         tts.save(tts_path)
         with open(tts_path, "rb") as f:
-            st.audio(f.read(), format="audio/mp3")
+            st.audio(f.read(), format="audio/mp3", autoplay=True)
+    except Exception as e:
+        st.error(f"❌ API Error: {str(e)}")
+
 
