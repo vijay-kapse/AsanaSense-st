@@ -1,24 +1,16 @@
-import base64
-import io
-import json
-import os
-from typing import Any, Dict, Optional
-
+# app.py
 import streamlit as st
+import base64
+import os
 from PIL import Image
+import google.generativeai as genai
+from gtts import gTTS
+import tempfile
 
-from asana_component import render as render_asana_component
-
-try:
-    import google.generativeai as genai
-except ImportError as exc:  # noqa: N813
-    raise RuntimeError(
-        "google-generativeai must be installed. Run 'pip install -r requirements.txt'."
-    ) from exc
-
-
-st.set_page_config(page_title="AsanaSense", page_icon="🧘", layout="wide")
-
+# -------------------------
+# CONFIG
+# -------------------------
+st.set_page_config(page_title="AsanaSense", page_icon="🧘", layout="centered")
 
 def configure_gemini() -> None:
     api_key = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -27,217 +19,84 @@ def configure_gemini() -> None:
         st.stop()
     genai.configure(api_key=api_key)
 
+configure_gemini()
 
-def decode_base64_image(data: str) -> Image.Image:
-    if "," in data:
-        data = data.split(",", 1)[1]
-    try:
-        image_bytes = base64.b64decode(data)
-    except base64.binascii.Error as exc:
-        raise ValueError("Invalid base64 image payload") from exc
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("Unable to open image") from exc
-    return image.convert("RGB")
+# -------------------------
+# CUSTOM CSS (Glassmorphic UI)
+# -------------------------
+st.markdown("""
+    <style>
+    .stApp {
+        background: linear-gradient(135deg, rgba(34,193,195,0.6), rgba(253,187,45,0.6));
+        backdrop-filter: blur(15px);
+        color: white;
+    }
+    .glass-card {
+        padding: 25px;
+        border-radius: 20px;
+        background: rgba(255,255,255,0.1);
+        backdrop-filter: blur(20px);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        text-align: center;
+    }
+    .title {
+        font-size: 2rem;
+        font-weight: bold;
+        color: white;
+        text-shadow: 1px 1px 2px black;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
+# -------------------------
+# HEADER
+# -------------------------
+st.markdown("<div class='glass-card'><p class='title'>🧘 AsanaSense</p><p>AI-powered yoga feedback</p></div>", unsafe_allow_html=True)
 
-def normalize_image(image: Image.Image) -> bytes:
-    max_side = 768
-    ratio = min(max_side / image.width, max_side / image.height, 1.0)
-    if ratio < 1.0:
-        new_size = (int(image.width * ratio), int(image.height * ratio))
-        image = image.resize(new_size, Image.LANCZOS)
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=90)
-    buffer.seek(0)
-    return buffer.read()
+# -------------------------
+# LIVE CAMERA INPUT
+# -------------------------
+img_file = st.camera_input("Capture your yoga pose 📸")
 
+analysis_text = ""
+if img_file and st.button("Analyze Pose"):
+    img = Image.open(img_file)
 
-def build_prompt(extra_context: Optional[str]) -> str:
-    base_prompt = (
-        "You are an elite yoga coach evaluating a practitioner's pose from a photograph. "
-        "Provide precise, empathetic coaching in short paragraphs. "
-        "Respond strictly in compact JSON with the keys: "
-        "asanaName (string), alignmentHighlights (array of strings), improvementTips (array), "
-        "riskWarnings (array), coachingCopy (string under 120 words)."
-    )
-    if extra_context:
-        base_prompt += f" Additional context: {extra_context}."
-    base_prompt += " Keep arrays concise (2-3 bullet points each)."
-    return base_prompt
+    # Convert image to base64
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        img.save(tmp.name)
+        image_path = tmp.name
 
+    img_bytes = open(image_path, "rb").read()
+    img_b64 = base64.b64encode(img_bytes).decode()
 
-def parse_response_text(text: str) -> Dict[str, Any]:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`\n")
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Unable to parse Gemini response") from exc
+    st.image(img, caption="Your Pose", use_column_width=True)
 
-
-def analyze_pose(image_base64: str, extra_prompt: Optional[str]) -> tuple[Dict[str, Any], str]:
-    image = decode_base64_image(image_base64)
-    normalized = normalize_image(image)
-
+    # -------------------------
+    # GEMINI VISION API CALL
+    # -------------------------
     model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = build_prompt(extra_prompt)
+    prompt = "Analyze this yoga pose and provide corrective feedback in 3-4 concise sentences."
 
     try:
-        response = model.generate_content(
-            [
-                prompt,
-                {
-                    "mime_type": "image/jpeg",
-                    "data": normalized,
-                },
-            ]
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Gemini request failed: {exc}") from exc
+        response = model.generate_content([
+            prompt,
+            {"mime_type": "image/png", "data": img_bytes}
+        ])
+        analysis_text = response.text
+        st.success("✅ Analysis Complete")
+        st.markdown(f"**Feedback:** {analysis_text}")
+    except Exception as e:
+        st.error(f"❌ API Error: {str(e)}")
 
-    text = getattr(response, "text", None)
-    if not text:
-        raise RuntimeError("No response text from Gemini")
+# -------------------------
+# TEXT TO SPEECH
+# -------------------------
+if analysis_text:
+    if st.button("🔊 Listen to Feedback"):
+        tts = gTTS(analysis_text)
+        tts_path = "feedback.mp3"
+        tts.save(tts_path)
+        with open(tts_path, "rb") as f:
+            st.audio(f.read(), format="audio/mp3")
 
-    feedback = parse_response_text(text)
-    return feedback, text
-
-
-def init_state() -> None:
-    st.session_state.setdefault("system_state", "ready")
-    st.session_state.setdefault("feedback", None)
-    st.session_state.setdefault("raw_text", "")
-    st.session_state.setdefault("voice_enabled", False)
-    st.session_state.setdefault("voice_supported", True)
-    st.session_state.setdefault("last_event_id", None)
-    st.session_state.setdefault("last_spoken_copy", "")
-    st.session_state.setdefault(
-        "status_text", "Say \"analyze\" or press the Analyze button to capture."
-    )
-
-
-def main() -> None:
-    configure_gemini()
-    init_state()
-
-    status_map = {
-        "listening": "Say \"analyze\" to capture a frame.",
-        "processing": "Hold steady while we analyze your pose.",
-        "error": "Something went wrong. Please check permissions and try again.",
-    }
-    state = st.session_state["system_state"]
-    default_status = status_map.get(state, "Say \"analyze\" or press the Analyze button to capture.")
-    if state == "error":
-        status_text = st.session_state.get("status_text", default_status)
-    else:
-        status_text = default_status
-    st.session_state["status_text"] = status_text
-
-    props: Dict[str, Any] = {
-        "systemState": state,
-        "feedback": st.session_state["feedback"],
-        "rawText": st.session_state["raw_text"],
-        "voiceEnabled": st.session_state["voice_enabled"],
-        "voiceSupported": st.session_state["voice_supported"],
-        "statusText": status_text,
-        "shouldSpeak": False,
-        "lastCaptureId": st.session_state.get("last_processed_capture_id"),
-    }
-
-    feedback = st.session_state.get("feedback")
-    if (
-        feedback
-        and feedback.get("coachingCopy")
-        and feedback["coachingCopy"] != st.session_state.get("last_spoken_copy")
-    ):
-        props["shouldSpeak"] = True
-        st.session_state["last_spoken_copy"] = feedback["coachingCopy"]
-
-    event = render_asana_component(props, key="asana-sense-holo")
-
-    if not event:
-        return
-
-    if not isinstance(event, dict):
-        st.warning("Received unexpected payload from UI component.")
-        return
-
-    event_id = event.get("eventId")
-    last_id = st.session_state.get("last_event_id")
-    if event_id and event_id == last_id:
-        return
-    if event_id:
-        st.session_state["last_event_id"] = event_id
-
-    event_type = event.get("type")
-
-    if event_type == "toggle_voice":
-        st.session_state["voice_enabled"] = bool(event.get("enable"))
-        st.session_state["system_state"] = (
-            "listening" if st.session_state["voice_enabled"] else "ready"
-        )
-        st.experimental_rerun()
-
-    if event_type == "voice_unsupported":
-        st.session_state["voice_supported"] = False
-        st.session_state["voice_enabled"] = False
-        st.session_state["system_state"] = "ready"
-        st.experimental_rerun()
-
-    if event_type == "camera_error":
-        st.session_state["system_state"] = "error"
-        st.session_state["status_text"] = (
-            "Camera access failed. Please allow camera permissions and reload."
-        )
-        st.experimental_rerun()
-
-    if event_type == "voice_error":
-        st.session_state["system_state"] = "error"
-        st.session_state["voice_enabled"] = False
-        st.session_state["status_text"] = "Voice recognition failed. You can still click Analyze."
-        st.experimental_rerun()
-
-    if event_type == "voice_transcript":
-        transcript = event.get("transcript", "")
-        if transcript:
-            st.toast(f"Heard: {transcript}")
-        return
-
-    if event_type == "capture_error":
-        st.warning("Unable to capture video frame. Try again.")
-        st.session_state["system_state"] = "error"
-        st.experimental_rerun()
-
-    if event_type == "capture":
-        image_base64 = event.get("imageBase64")
-        if not image_base64:
-            st.warning("No image data received from capture.")
-            return
-        st.session_state["system_state"] = "processing"
-        st.session_state["status_text"] = "Analyzing pose..."
-        with st.spinner("Analyzing pose with Gemini..."):
-            try:
-                feedback_data, raw_text = analyze_pose(image_base64, None)
-            except (RuntimeError, ValueError) as exc:
-                st.error(str(exc))
-                st.session_state["system_state"] = "error"
-                st.experimental_rerun()
-                return
-        st.session_state["feedback"] = feedback_data
-        st.session_state["raw_text"] = raw_text
-        st.session_state["system_state"] = (
-            "listening" if st.session_state["voice_enabled"] else "ready"
-        )
-        st.session_state["status_text"] = "Say \"analyze\" or press Analyze to capture."
-        st.session_state["last_processed_capture_id"] = event.get("eventId")
-        st.experimental_rerun()
-
-
-if __name__ == "__main__":
-    main()
