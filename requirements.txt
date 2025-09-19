@@ -1,3 +1,7 @@
 streamlit
 pillow
 google-generativeai
+streamlit>=1.38.0
+pillow
+google-generativeai
+gTTS
