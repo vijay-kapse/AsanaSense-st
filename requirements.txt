@@ -3,7 +3,7 @@ streamlit-webrtc
 google-generativeai
 gTTS
 pillow
-whisper
+openai-whisper
 torch
 soundfile
 
