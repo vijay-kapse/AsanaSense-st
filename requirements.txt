@@ -1,7 +1,9 @@
 streamlit
-pillow
-google-generativeai
-streamlit>=1.38.0
-pillow
+streamlit-webrtc
 google-generativeai
 gTTS
+pillow
+whisper
+torch
+soundfile
+
